@@ -323,6 +323,33 @@ static uint32_t ba_mlen, ba_mn;
 static uint8_t ba_live;                            /* bt_audio_feed streams (the audio ISR's) */
 static uint32_t ba_qavg;                           /* the audio packets queued (bt_page.c bp_mq), mean over ~0.7 s, Q8 */
 
+/* Temporary live SBC capture for diagnosing sink/channel interoperability. Four 1-second windows,
+ * first eight SBC frames per window. Stored in the shared pool, not scarce .bss RAM. */
+#define BA_CAP_PHASES 4u
+#define BA_CAP_FRAMES 8u
+struct ba_capture {
+    volatile uint8_t active, ready;
+    uint32_t samples;
+    uint8_t count[BA_CAP_PHASES];
+    uint8_t len[BA_CAP_PHASES][BA_CAP_FRAMES];
+    uint8_t data[BA_CAP_PHASES][BA_CAP_FRAMES][128];
+};
+static struct ba_capture ba_cap IN_POOL;
+static void ba_capture_arm(void)
+{
+    uint32_t p, f;
+    ba_cap.active = 0;
+    ba_cap.ready = 0;
+    ba_cap.samples = 0;
+    for (p = 0; p < BA_CAP_PHASES; p++) {
+        ba_cap.count[p] = 0;
+        for (f = 0; f < BA_CAP_FRAMES; f++)
+            ba_cap.len[p][f] = 0;
+    }
+    ba_cap.active = 1;
+}
+
+
 /* how much later than the FM-1's own output the Bluetooth stream leaves us, TIMER4 ticks; -1 not streaming
  * (io/midi/clock_sync.c sync_lead_t: a clock followed that much earlier). Ours only: a sample waits half a packet
  * for its SBC frames, then the queue's mean depth of packets, less the DMA's half buffer sync_out_t counts. The
@@ -395,6 +422,21 @@ int bt_audio_feed(const int32_t *q15_pcm, uint32_t n)   /* 1: it streams (audio.
         if (ba_pcm_cnt >= BT_SBC_SAMPLES_PER_FRAME) {
             uint8_t frame[128];
             uint32_t slen = bt_sbc_encode(&ba_sbc, ba_pcm_acc, frame), k;
+            if (ba_cap.active) {
+                uint32_t phase = ba_cap.samples / 44100u;
+                if (phase < BA_CAP_PHASES && ba_cap.count[phase] < BA_CAP_FRAMES) {
+                    uint32_t ci = ba_cap.count[phase], z;
+                    ba_cap.len[phase][ci] = (uint8_t)(slen > 128u ? 128u : slen);
+                    for (z = 0; z < ba_cap.len[phase][ci]; z++)
+                        ba_cap.data[phase][ci][z] = frame[z];
+                    ba_cap.count[phase]++;
+                }
+                ba_cap.samples += BT_SBC_SAMPLES_PER_FRAME;
+                if (ba_cap.samples >= BA_CAP_PHASES * 44100u) {
+                    ba_cap.active = 0;
+                    ba_cap.ready = 1;
+                }
+            }
             for (k = 0; k < slen && ba_mlen + k < sizeof ba_mbuf; k++)
                 ba_mbuf[ba_mlen + k] = frame[k];
             ba_mlen += k;

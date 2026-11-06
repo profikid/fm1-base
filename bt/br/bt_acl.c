@@ -19,6 +19,10 @@ enum { BA_CH_SDP, BA_CH_SIG, BA_CH_MEDIA, BA_CH_SDPS, BA_CH_AVC, BA_NCH };   /* 
                                                     * server; AVC: its AVRCP control channel (AVCTP, PSM 0x0017) */
 static const uint16_t ba_cid[BA_NCH] = {0x0040u, 0x0041u, 0x0042u, 0x0043u, 0x0044u};   /* our channel ids */
 static uint8_t ba_sbc_init_done;                 /* (the encoder is set up: its own mode, the one agreed with the device) */
+static uint8_t ba_sbc_prefer;                    /* (the mode the app asks for at the next negotiation: 0 the base's choice
+                                                   * (plain stereo first, the one every speaker decodes), 1 joint stereo, 2 plain
+                                                   * stereo. The app sets it (same translation unit); the encoder follows what
+                                                   * was agreed, never this) */
 #define BL_PSM_AVCTP 0x0017u
 #define BA_VOLUME 90u                              /* the sink's absolute volume we set (0..127): the AirPods play at
                                                     * 0/127 until the source sets it (a Raspberry Pi's capture, 2026-10-21) */
@@ -249,7 +253,7 @@ static void ba_av_in(const uint8_t *p, uint32_t n)
         ba_av_cmd(BV_GET_CAPS, par, 1);
         ba.stage = BA_AV_CAPS;
     } else if (sig == BV_GET_CAPS) {
-        if (!bv_caps_sbc(p, n, cap) || !bv_sbc_choose(cap, ba.conf)) {
+        if (!bv_caps_sbc(p, n, cap) || !bv_sbc_choose(cap, ba.conf, ba_sbc_prefer)) {
             ba_line("AVDTP GET_CAPABILITIES: no SBC we can use (bytes, 0)", n, 0);
             ba.stage = BA_FAILED;
             return;
@@ -383,6 +387,19 @@ static void ba_capture_mode(uint8_t *mode, uint8_t *bitpool)
     *mode = (uint8_t)(ba_sbc_init_done ? ba_sbc.p.s16ChannelMode : 0u);
     *bitpool = (uint8_t)ba_sbc.p.s16BitPool;
 }
+/* the channel mode we agreed with the device (A2DP 1.3 4.3, the SBC capability's byte 0: bit 0 joint stereo, bit 1
+ * stereo): 0 none yet (nothing configured), 1 joint stereo, 2 plain stereo.
+ * An app that sets the encoder itself asks this first: a sink that was told one mode and receives frames in the
+ * other reads the wrong channel layout, and one of the two channels falls silent (the user, 2026-11-06: only the
+ * right channel of the speaker sounded, on Polly, LOOM-8 and Optimist alike). */
+static uint8_t ba_sbc_agreed_mode(void)
+{
+    if (ba.conf[0] & 0x02u)
+        return 2u;                                  /* plain stereo */
+    if (ba.conf[0] & 0x01u)
+        return 1u;                                  /* joint stereo */
+    return 0u;
+}
 
 
 /* how much later than the FM-1's own output the Bluetooth stream leaves us, TIMER4 ticks; -1 not streaming
@@ -448,10 +465,17 @@ int bt_audio_feed(const int32_t *q15_pcm, uint32_t n)   /* 1: it streams (audio.
          * mode that was agreed: a device that was told "stereo" and receives joint-stereo frames reads the
          * wrong channel layout and one of the two channels falls silent (the user, 2026-11-06: only the
          * right channel of the speaker sounded, on LOOM-8, Polly and CHOPPAH alike). */
-        uint8_t js = (uint8_t)((ba.conf[0] & 0x01u) && !(ba.conf[0] & 0x02u) ? 1u : 0u);
+        uint8_t js = (uint8_t)(ba_sbc_agreed_mode() == 1u ? 1u : 0u);
         bt_sbc_init(&ba_sbc, 44100, bp_max < ba.conf[2] ? ba.conf[2] : bp_max, js);
         ba_sbc_init_done = 1;
         ba_capture_arm();                         /* (the diagnosis capture: the frames of this stream, to be read out) */
+    } else if (ba_sbc.p.s16ChannelMode != (ba_sbc_agreed_mode() == 1u ? SBC_JOINT_STEREO : SBC_STEREO)) {
+        /* the encoder's mode is not the mode that was agreed (an app set the encoder itself, in its own unit): it
+         * follows the agreement again, its bitpool kept. A device that was told "stereo" and receives joint-stereo
+         * frames reads the wrong channel layout and one of the two channels falls silent (the user, 2026-11-06: only
+         * the right channel of the speaker sounded, on Polly, LOOM-8 and Optimist alike). The base owns the encoder's
+         * mode: the agreement decides, never the app. */
+        bt_sbc_init(&ba_sbc, 44100, (uint8_t)ba_sbc.p.s16BitPool, ba_sbc_agreed_mode() == 1u);
     }
     for (i = 0; i < n; i++) {
         int32_t l = q15_pcm[2u * i];

@@ -38,10 +38,16 @@ static uint8_t frame_mode(const uint8_t *f)
     return (uint8_t)((f[1] >> 2) & 0x03u);
 }
 
-/* the mode we agreed, out of the configuration (ba.conf[0]: bit 0 joint stereo, bit 1 stereo) */
+/* the mode we agreed, out of the configuration (ba.conf[0]: bit 0 joint stereo, bit 1 stereo): the base's own
+ * function (bt_acl.c ba_sbc_agreed_mode), copied here (it is static in a translation unit with the whole stack,
+ * and the test does not link the stack) */
 static uint8_t agreed_mode(uint8_t conf0)
 {
-    return (uint8_t)((conf0 & 0x01u) && !(conf0 & 0x02u) ? SBC_JOINT_STEREO : SBC_STEREO);
+    if (conf0 & 0x02u)
+        return 2u;                                  /* plain stereo */
+    if (conf0 & 0x01u)
+        return 1u;                                  /* joint stereo */
+    return 0u;                                      /* none */
 }
 
 int main(void)
@@ -55,7 +61,7 @@ int main(void)
         pcm[i] = (int16_t)((i & 1u) ? 8000 : -8000);   /* a square wave, left and right alike */
 
     /* the device offers both modes: plain stereo is agreed (bt_avdtp.c bv_sbc_choose) */
-    bt_sbc_init(&c, 44100, 46u, agreed_mode(0x22u) == SBC_JOINT_STEREO ? 1u : 0u);
+    bt_sbc_init(&c, 44100, 46u, agreed_mode(0x22u) == 1u ? 1u : 0u);
     n = bt_sbc_encode(&c, pcm, frame);
     check("the agreed plain stereo: the encoder's mode is plain stereo",
           c.p.s16ChannelMode == SBC_STEREO);
@@ -65,7 +71,7 @@ int main(void)
           n == bt_sbc_frame_len(46u, 0u));
 
     /* the device offers joint stereo only: joint stereo is agreed */
-    bt_sbc_init(&c, 44100, 46u, agreed_mode(0x21u) == SBC_JOINT_STEREO ? 1u : 0u);
+    bt_sbc_init(&c, 44100, 46u, agreed_mode(0x21u) == 1u ? 1u : 0u);
     n = bt_sbc_encode(&c, pcm, frame);
     check("the agreed joint stereo: the encoder's mode is joint stereo",
           c.p.s16ChannelMode == SBC_JOINT_STEREO);
@@ -79,13 +85,20 @@ int main(void)
         static const uint8_t confs[4] = {0x21u, 0x22u, 0x23u, 0x20u};
         uint32_t k, bad = 0;
         for (k = 0; k < 4u; k++) {
-            bt_sbc_init(&c, 44100, 46u, agreed_mode(confs[k]) == SBC_JOINT_STEREO ? 1u : 0u);
+            bt_sbc_init(&c, 44100, 46u, agreed_mode(confs[k]) == 1u ? 1u : 0u);
             n = bt_sbc_encode(&c, pcm, frame);
             if (n < 4u || frame_mode(frame) != c.p.s16ChannelMode)
                 bad++;
         }
         check("the encoder's mode and the frame's header always agree", bad == 0);
     }
+
+    /* the mode we agreed: plain stereo first (bt_avdtp.c bv_sbc_choose), joint stereo only when the sink has no
+     * plain stereo, and nothing when nothing was configured */
+    check("the agreed mode: plain stereo when the sink has both", agreed_mode(0x22u) == 2u);
+    check("... joint stereo when the sink has only that", agreed_mode(0x21u) == 1u);
+    check("... plain stereo when the sink has both and joint stereo", agreed_mode(0x23u) == 2u);
+    check("... none when nothing was configured", agreed_mode(0x00u) == 0u);
 
     printf(fails ? "bt_sbc_mode_test: %d FAILED\n" : "bt_sbc_mode_test: all ok\n", fails);
     return fails != 0;

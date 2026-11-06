@@ -50,15 +50,18 @@ int bv_caps_sbc(const uint8_t *p, uint32_t n, uint8_t sbc[4])
     return 0;
 }
 
-int bv_sbc_choose(const uint8_t cap[4], uint8_t conf[4])
+int bv_sbc_choose(const uint8_t cap[4], uint8_t conf[4], uint8_t prefer)
 {
     uint32_t freq = cap[0] & 0x20u ? 0x20u : cap[0] & 0x10u ? 0x10u : 0;   /* 44.1 kHz, else 48 kHz */
     /* plain stereo first, joint stereo only when the device has no plain stereo (A2DP 1.3 4.3: the SBC capability's
      * byte 0, bit 0 joint stereo, bit 1 stereo). Nearly every speaker offers both, and a few decode joint stereo
      * wrongly: the join byte is read as a scale factor and one channel falls silent (the user, 2026-11-06: only
      * the right channel of the speaker sounded, on Polly, LOOM-8 and Optimist alike). Plain stereo is the mode
-     * every speaker decodes, and it costs one byte a frame (bt_sbc_frame_len). */
-    uint32_t mode = cap[0] & 0x02u ? 0x02u : cap[0] & 0x01u ? 0x01u : 0;   /* stereo, else joint stereo */
+     * every speaker decodes, and it costs one byte a frame (bt_sbc_frame_len).
+     * prefer: 0 the app leaves it to us (this), 1 joint stereo (the app asks for it: joint stereo when the device
+     * has it, else plain stereo), 2 plain stereo (the same as 0 here, said out loud). */
+    uint32_t mode = prefer == 1u ? (cap[0] & 0x01u ? 0x01u : cap[0] & 0x02u ? 0x02u : 0)   /* joint first */
+                                 : (cap[0] & 0x02u ? 0x02u : cap[0] & 0x01u ? 0x01u : 0);   /* plain first */
     uint32_t blk = cap[1] & 0x10u ? 0x10u : 0, sub = cap[1] & 0x04u ? 0x04u : 0;
     uint32_t alloc = cap[1] & 0x01u ? 0x01u : cap[1] & 0x02u ? 0x02u : 0;  /* loudness, else SNR */
     uint32_t lo = cap[2] < 2u ? 2u : cap[2], hi = cap[3] > 53u ? 53u : cap[3];

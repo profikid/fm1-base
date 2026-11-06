@@ -32,15 +32,22 @@ int main(void)
     check("GET_CAPABILITIES answer: SBC FF FF 02 35", bv_caps_sbc(caps, 14, sbc) && sbc[0] == 0xFF && sbc[3] == 53);
     check("... no codec, no SBC", !bv_caps_sbc(caps, 6, sbc));
     check("SBC choice: 44.1 kHz plain stereo, 16 blocks 8 subbands loudness, bitpool 2..53",
-          bv_sbc_choose(sbc, conf) && conf[0] == 0x22 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
+          bv_sbc_choose(sbc, conf, 0) && conf[0] == 0x22 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
     sbc[0] = 0x21;                                  /* joint stereo only */
     check("... joint stereo when the device has no plain stereo",
-          bv_sbc_choose(sbc, conf) && conf[0] == 0x21 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
+          bv_sbc_choose(sbc, conf, 0) && conf[0] == 0x21 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
+    sbc[0] = 0x23;                                  /* the device has both */
+    check("... joint stereo when the app asks for it and the device has it",
+          bv_sbc_choose(sbc, conf, 1) && conf[0] == 0x21);
+    check("... plain stereo when the app leaves it to the base",
+          bv_sbc_choose(sbc, conf, 0) && conf[0] == 0x22);
+    check("... plain stereo when the app asks for it and the device has it",
+          bv_sbc_choose(sbc, conf, 2) && conf[0] == 0x22);
     sbc[0] = 0x12, sbc[3] = 250;
     check("... 48 kHz stereo when that is all, bitpool capped at 53",
-          bv_sbc_choose(sbc, conf) && conf[0] == 0x12 && conf[3] == 53);
+          bv_sbc_choose(sbc, conf, 0) && conf[0] == 0x12 && conf[3] == 53);
     sbc[1] = 0x20;
-    check("... no choice without 16 blocks", !bv_sbc_choose(sbc, conf));
+    check("... no choice without 16 blocks", !bv_sbc_choose(sbc, conf, 0));
     conf[0] = 0x21, conf[1] = 0x15, conf[2] = 2, conf[3] = 53;
     check("SET_CONFIGURATION parameters: ACP 3, INT 1, transport, SBC", bv_setconf_par(o, 3, 1, conf) == 12 &&
                                                                              !memcmp(o, setp, 12));

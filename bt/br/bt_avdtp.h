@@ -17,9 +17,11 @@ int bv_hdr(const uint8_t *p, uint32_t n, uint32_t *label, uint32_t *msg, uint32_
 uint32_t bv_pick_sink(const uint8_t *p, uint32_t n);
 /* the SBC codec information (4 bytes) in a GET_CAPABILITIES answer -> 1 found */
 int bv_caps_sbc(const uint8_t *p, uint32_t n, uint8_t sbc[4]);
-/* our SBC configuration from the sink's capabilities: 44.1 kHz else 48, joint stereo else stereo, 16 blocks, 8
- * subbands, loudness, bitpool min..min(max, 53) -> 1 when a choice exists */
-int bv_sbc_choose(const uint8_t cap[4], uint8_t conf[4]);
+/* our SBC configuration from the sink's capabilities: 44.1 kHz else 48, 16 blocks, 8 subbands, loudness, bitpool
+ * min..min(max, 53) -> 1 when a choice exists. The mode: plain stereo (the one every speaker decodes) unless the
+ * app asks for joint stereo (prefer 1) and the device has it. The mode codes: 0 none, 1 joint stereo, 2 plain
+ * stereo (the same as bt_acl.c ba_sbc_agreed_mode). */
+int bv_sbc_choose(const uint8_t cap[4], uint8_t conf[4], uint8_t prefer);
 /* SET_CONFIGURATION's parameters (ACP SEID, INT SEID, media transport, SBC codec) -> their length */
 uint32_t bv_setconf_par(uint8_t *out, uint32_t acp, uint32_t intseid, const uint8_t conf[4]);
 

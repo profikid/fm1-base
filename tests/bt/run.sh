@@ -63,6 +63,8 @@ t bt_sdps bt_sdps_test.c
 t bt_avrcp bt_avrcp_test.c
 t bt_avdtp bt_avdtp_test.c
 t bt_sbc bt_sbc_test.c -O2 -w -I$T/ref/sbc_dec $T/ref/sbc_dec/*.c -lm
+t bt_sbc_mode bt_sbc_mode_test.c -O2 -w -I$T/ref/sbc_dec $T/ref/sbc_dec/*.c -lm
+t bt_capture bt_capture_test.c
 # FM-1 to FM-1: two whole stacks, units built apart
 F2F=1
 unit() {   # unit OBJ FLAGS...

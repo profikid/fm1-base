@@ -31,7 +31,10 @@ int main(void)
     check("... none when only a source", bv_pick_sink(disc, 4) == 0);
     check("GET_CAPABILITIES answer: SBC FF FF 02 35", bv_caps_sbc(caps, 14, sbc) && sbc[0] == 0xFF && sbc[3] == 53);
     check("... no codec, no SBC", !bv_caps_sbc(caps, 6, sbc));
-    check("SBC choice: 44.1 kHz joint stereo, 16 blocks 8 subbands loudness, bitpool 2..53",
+    check("SBC choice: 44.1 kHz plain stereo, 16 blocks 8 subbands loudness, bitpool 2..53",
+          bv_sbc_choose(sbc, conf) && conf[0] == 0x22 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
+    sbc[0] = 0x21;                                  /* joint stereo only */
+    check("... joint stereo when the device has no plain stereo",
           bv_sbc_choose(sbc, conf) && conf[0] == 0x21 && conf[1] == 0x15 && conf[2] == 2 && conf[3] == 53);
     sbc[0] = 0x12, sbc[3] = 250;
     check("... 48 kHz stereo when that is all, bitpool capped at 53",

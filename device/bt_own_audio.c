@@ -298,6 +298,36 @@ static int bta_frame(const uint8_t *p, uint32_t n)
         break;
     case 9: plat_bta_hangup(); break;
     case 10: plat_bta_forget(arg); break;
+    case 11: {                          /* the SBC capture of the stream (bt_acl.c ba_capture_frame_hex): the frames as hex */
+        uint8_t mode, bitpool;
+        char h[24];
+        uint8_t *q = (uint8_t *)h;
+        ba_capture_mode(&mode, &bitpool);
+        *q++ = (uint8_t)('0' + (mode == 3u ? 3u : mode == 2u ? 2u : mode == 1u ? 1u : 0u));
+        *q++ = ' ';
+        *q++ = (uint8_t)('0' + (bitpool / 10u));
+        *q++ = (uint8_t)('0' + (bitpool % 10u));
+        *q++ = ' ';
+        for (i = 0; i < 4; i++)                   /* the windows, how many frames each holds */
+            *q++ = (uint8_t)('0' + ba_capture_count((uint32_t)i));
+        *q++ = 0;
+        bta_line(h);
+        break;
+    }
+    case 12: {                          /* one captured frame as hex: the frame (p[4]), the window (p[5]) */
+        uint8_t hex[300];
+        uint32_t w = ba_capture_frame_hex(n >= 6u ? (uint32_t)p[5] : 0u, (uint32_t)(arg & 0xFFu), hex, sizeof hex);
+        if (w) {
+            uint8_t f[320];
+            uint32_t k = 0;
+            f[k++] = 0xF0; f[k++] = 0x7D; f[k++] = 0x4C; f[k++] = 0x41; f[k++] = 0x10;
+            for (i = 0; i < (int)w && k < sizeof f - 1u; i++)
+                f[k++] = hex[i];
+            f[k++] = 0xF7;
+            ota_wire_send(f, k);
+        }
+        break;
+    }
     default: break;
     }
     ota_wire_send(end, sizeof end);

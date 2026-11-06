@@ -48,7 +48,7 @@ LC, LG, LW, SR = [0x7D, 0x4C, 0x43], [0x7D, 0x4C, 0x47], [0x7D, 0x4C, 0x57], [0x
 WIFI_OP = {"on": 1, "off": 2, "scan": 3, "status": 4, "saved": 5, "forget": 6, "join": 7, "found": 8}
 LA = [0x7D, 0x4C, 0x41]                    # Bluetooth audio (device/bt_own_audio.c bta_frame)
 BTA_OP = {"on": 1, "off": 2, "scan": 3, "status": 4, "found": 5, "pick": 6, "connect": 7, "known": 8, "hangup": 9,
-          "forget": 10}
+          "forget": 10, "capture": 11, "capture-frame": 12}
 LD = [0x7D, 0x4C, 0x44]                    # Bluetooth MIDI devices, own stack (device/bt_own_central.c dev_frame)
 DEV_OP = {"scan": 1, "stop": 2, "found": 3, "connect": 4, "disconnect": 5, "status": 6}
 
@@ -181,6 +181,8 @@ class FM1:
                 if op is None:
                     raise SystemExit(f"bta {a!r}: " + ", ".join(BTA_OP))
                 data, used = ([int(b)], 3) if a in ("pick", "connect", "forget") else ([], 2)
+                if a == "capture-frame":            # the frame (arg & 255) and the window (arg >> 8)
+                    data, used = [int(b) & 0xFF, (int(b) >> 8) & 0xFF], 3
                 self.sysex(LA + [op] + data)
                 for f in self.frames(LA, 3.0, until=lambda f: f[:1] == b"\x11"):
                     if f[:1] == b"\x10":

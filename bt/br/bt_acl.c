@@ -18,6 +18,7 @@
 enum { BA_CH_SDP, BA_CH_SIG, BA_CH_MEDIA, BA_CH_SDPS, BA_CH_AVC, BA_NCH };   /* SDPS: the device's SDP channel to our
                                                     * server; AVC: its AVRCP control channel (AVCTP, PSM 0x0017) */
 static const uint16_t ba_cid[BA_NCH] = {0x0040u, 0x0041u, 0x0042u, 0x0043u, 0x0044u};   /* our channel ids */
+static uint8_t ba_sbc_init_done;                 /* (the encoder is set up: its own mode, the one agreed with the device) */
 #define BL_PSM_AVCTP 0x0017u
 #define BA_VOLUME 90u                              /* the sink's absolute volume we set (0..127): the AirPods play at
                                                     * 0/127 until the source sets it (a Raspberry Pi's capture, 2026-10-21) */
@@ -66,6 +67,7 @@ static void ba_reset(void)
     ba.fresh = 0;
     ba.rejoin = 0;
     ba.auth_ms = 0;
+    ba_sbc_init_done = 0;                          /* (the encoder is set up again for the new device: its own mode) */
     for (i = 0; i < BA_NCH; i++)
         ba.ch[i].state = 0;
 }
@@ -307,7 +309,6 @@ static uint32_t ba_rtp_ts;
 static struct bt_sbc_ctx ba_sbc;
 static int16_t ba_pcm_acc[BT_SBC_SAMPLES_PER_FRAME * 2];
 static uint32_t ba_pcm_cnt;
-static uint8_t ba_sbc_init_done;
 
 #define BA_MFRAMES 3u                              /* SBC frames a packet: 3 x 105 B (bitpool 46) + 17 B of L2CAP and
                                                     * media headers in one DH5 (339 B): 115 DH5 a second instead of 172
@@ -347,6 +348,40 @@ static void ba_capture_arm(void)
             ba_cap.len[p][f] = 0;
     }
     ba_cap.active = 1;
+}
+/* The capture's readout: one captured frame as hex, the way a speaker's decoder gets it, byte for byte. With
+ * it one can decode the frames with an independent decoder (AOSP's, tools/bt_capture_decode.py) and see whether
+ * the two channels come back (the user, 2026-11-06: only the right channel of the speaker sounded, on Polly,
+ * LOOM-8 and Optimist alike).
+ *   phase, frame: which of the capture's windows and frames
+ *   out: the hex of the frame, two hex digits a byte, no separator
+ *   n: the room in out
+ *   returns the bytes written, 0: no such frame (not captured yet)
+ * A frame that is counted is a frame that is whole: the bytes are in before the count goes up. */
+static uint32_t ba_capture_frame_hex(uint32_t phase, uint32_t frame, uint8_t *out, uint32_t n)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    uint32_t z, w = 0;
+    if (phase >= BA_CAP_PHASES || frame >= BA_CAP_FRAMES || frame >= ba_cap.count[phase])
+        return 0;
+    for (z = 0; z < ba_cap.len[phase][frame] && w + 2u < n; z++) {
+        uint8_t b = ba_cap.data[phase][frame][z];
+        out[w++] = (uint8_t)hex[b >> 4];
+        out[w++] = (uint8_t)hex[b & 15u];
+    }
+    return w;
+}
+/* the capture's shape: the frames it holds, per window */
+static uint32_t ba_capture_count(uint32_t phase)
+{
+    return phase < BA_CAP_PHASES ? ba_cap.count[phase] : 0u;
+}
+/* the encoder's state as the capture sees it: the mode and the bitpool (so the hex can be read as the
+ * stream it is) */
+static void ba_capture_mode(uint8_t *mode, uint8_t *bitpool)
+{
+    *mode = (uint8_t)(ba_sbc_init_done ? ba_sbc.p.s16ChannelMode : 0u);
+    *bitpool = (uint8_t)ba_sbc.p.s16BitPool;
 }
 
 
@@ -408,8 +443,15 @@ int bt_audio_feed(const int32_t *q15_pcm, uint32_t n)   /* 1: it streams (audio.
     ba_qavg += ((int32_t)((bp_mq.w - bp_mq.r) << 8) - (int32_t)ba_qavg) >> 9;
     if (!ba_sbc_init_done) {
         uint8_t bp_max = ba.conf[3] < BA_BITPOOL ? ba.conf[3] : (uint8_t)BA_BITPOOL;   /* (the agreed range) */
-        bt_sbc_init(&ba_sbc, 44100, bp_max < ba.conf[2] ? ba.conf[2] : bp_max, 1);
+        /* the channel mode we agreed with the device (A2DP 1.3 4.3, the SBC capability's byte 0: bit 0 joint
+         * stereo, bit 1 stereo; bt_avdtp.c bv_sbc_choose keeps the bits as they are). The encoder must use the
+         * mode that was agreed: a device that was told "stereo" and receives joint-stereo frames reads the
+         * wrong channel layout and one of the two channels falls silent (the user, 2026-11-06: only the
+         * right channel of the speaker sounded, on LOOM-8, Polly and CHOPPAH alike). */
+        uint8_t js = (uint8_t)((ba.conf[0] & 0x01u) && !(ba.conf[0] & 0x02u) ? 1u : 0u);
+        bt_sbc_init(&ba_sbc, 44100, bp_max < ba.conf[2] ? ba.conf[2] : bp_max, js);
         ba_sbc_init_done = 1;
+        ba_capture_arm();                         /* (the diagnosis capture: the frames of this stream, to be read out) */
     }
     for (i = 0; i < n; i++) {
         int32_t l = q15_pcm[2u * i];

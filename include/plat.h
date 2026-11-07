@@ -89,6 +89,17 @@ int plat_usb_lost(void);
 uint32_t plat_midi_count(int port, int out);   /* messages through port PORT_* since the start (out: sent), real-time (clock...) left out */
 uint32_t plat_midi_ago(int port, int out);     /* ms since the last one (0xFFFFFFFF: none yet) */
 
+/* USB microphone capture: the FM-1 is the USB host and a USB Audio Class microphone streams PCM in.
+ * The capture is the platform's (device/usb_mic.c): the app reads what the device received.
+ * plat_mic_read is called from the app's audio interrupt: it never blocks, never allocates, never reads flash. */
+enum { PLAT_MIC_NONE = 0, PLAT_MIC_CONNECTED = 1, PLAT_MIC_STREAMING = 2, PLAT_MIC_ERROR = 3 };
+int plat_mic_state(void);
+uint32_t plat_mic_rate(void);       /* the device's sample rate (44100 or 48000); 0 = no device */
+int plat_mic_channels(void);        /* 1 or 2 */
+int plat_mic_bits(void);            /* 16 or 24 */
+int plat_mic_read(int32_t *dst, uint32_t n);   /* up to n samples, interleaved as the device sends them; the count read
+                                              * (a whole number of frames: the capture is a stream of frames) */
+
 /* Bluetooth MIDI (fm1.toml ble = true: FM1B_BLE 1): JieLi's BT libraries on fm1-base's shim (ble/), started at
  * every boot unless the last Bluetooth run crashed (then by hand: plat_ble_start). The app gives it a store object,
  * OBJ_BLE (the radio's address and pairing). Without it (FM1B_BLE 0, tools/build.py --no-ble) nothing of JieLi's is

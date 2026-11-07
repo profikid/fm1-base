@@ -22,6 +22,8 @@
  *   ble connect | ble link | ble disconnect   a central listening, or linked and not yet listening (FM1B_BLE: the
  *                                stand-in stack is ready a second after the start)
  *   wav FILE | wavstop           start / stop recording the output
+ *   wavin FILE | wavin           the USB microphone: a 16-bit PCM WAV (mono or stereo, 44.1 or 48 kHz) fed to the
+ *                                app as the capture of device/usb_mic.c would; "wavin" without a file stops it
  *   peakreset                    restart the output peak (expect peak_db_min / peak_db_max)
  *   shot FILE.png                save the screen
  *   leds                         print the lit buttons and keys (keys: # bright, + dim)
@@ -29,7 +31,8 @@
  *   expect_out PORT B0 B1 B2     check that this message went out to PORT since the last "out" (USB, BLE, BLE-DEV)
  *   expect_no_out PORT B0 B1 B2  check that it did not
  *   expect WHAT VALUE            check state: exit 1 on mismatch; VALUE "<N" / ">N" is a bound (WHAT: store_writes,
- *                                store_tries, clocks_out, midi_out, usb_play_gain, usb_audio_full, ... below)
+ *                                store_tries, clocks_out, midi_out, usb_play_gain, usb_audio_full, mic_state,
+ *                                mic_rate, ... below)
  *   reboot                       re-run boot from the simulated flash (persistence test)
  *   data FILE OFFSET             a file into the simulated data area (plat_data) at OFFSET (its windows: plat.h)
  *   res 0|1                      (FM1B_RES) the resource region there (1, at start) or not (0: an FM-1 updated
@@ -967,6 +970,122 @@ static void wav_close(void)
     wav = 0;
 }
 
+/* ---------------------------------------------------- the microphone --- */
+/* The simulated USB microphone: a WAV file the script hands over ("wavin FILE"; "wavin" without a file stops it). The
+ * app reads it as the capture of device/usb_mic.c would: the samples arrive at the file's rate, interleaved as the
+ * file has them. The file is read with the host's stdio (the device's capture is not in the simulator). */
+static int32_t *mic_buf;                    /* the file's samples */
+static uint32_t mic_n, mic_rate, mic_ch, mic_bits;
+static uint32_t mic_pos, mic_read;          /* the samples delivered and the ones the app took */
+static uint32_t mic_acc;                     /* the samples still to come (the clock is in milliseconds) */
+static int mic_on;
+
+static void mic_stop(void)
+{
+    free(mic_buf);
+    mic_buf = 0;
+    mic_n = 0;
+    mic_pos = mic_read = 0;
+    mic_acc = 0;
+    mic_on = 0;
+}
+
+/* the file: 16-bit PCM, mono or stereo, 44.1 or 48 kHz. 1 = loaded. */
+static int mic_load(const char *path)
+{
+    FILE *f;
+    uint8_t hdr[12], ch8[8], fmtb[16];
+    uint16_t fmt = 0, ch = 0, bits = 0;
+    uint32_t rate = 0, sz = 0;
+    int16_t *raw;
+    int32_t *buf;
+    size_t i, n;
+    f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    if (fread(hdr, 1, 12, f) != 12 || memcmp(hdr, "RIFF", 4) || memcmp(hdr + 8, "WAVE", 4))
+        goto bad;
+    for (;;) {
+        if (fread(ch8, 1, 8, f) != 8)
+            goto bad;
+        sz = (uint32_t)ch8[4] | (uint32_t)ch8[5] << 8 | (uint32_t)ch8[6] << 16 | (uint32_t)ch8[7] << 24;
+        if (!memcmp(ch8, "fmt ", 4)) {
+            if (sz < 16u || fread(fmtb, 1, 16, f) != 16)
+                goto bad;
+            fmt = (uint16_t)(fmtb[0] | fmtb[1] << 8);
+            ch = (uint16_t)(fmtb[2] | fmtb[3] << 8);
+            rate = (uint32_t)fmtb[4] | (uint32_t)fmtb[5] << 8 | (uint32_t)fmtb[6] << 16 | (uint32_t)fmtb[7] << 24;
+            bits = (uint16_t)(fmtb[14] | fmtb[15] << 8);
+            if (sz > 16u)
+                fseek(f, (long)(sz - 16u), SEEK_CUR);
+        } else if (!memcmp(ch8, "data", 4)) {
+            break;
+        } else
+            fseek(f, (long)(sz + (sz & 1u)), SEEK_CUR);
+    }
+    if (fmt != 1u || bits != 16u || (ch != 1u && ch != 2u) || (rate != 44100u && rate != 48000u))
+        goto bad;
+    n = sz / 2u;                              /* the samples in the file */
+    if (!n)
+        goto bad;
+    raw = (int16_t *)malloc(n * 2u);
+    buf = (int32_t *)malloc(n * 4u);
+    if (!raw || !buf) {
+        free(raw);
+        free(buf);
+        goto bad;
+    }
+    if (fread(raw, 2, n, f) != n) {           /* a short file: take what came */
+        n = (size_t)(ftell(f) / 2);
+        if (!n) {
+            free(raw);
+            free(buf);
+            goto bad;
+        }
+    }
+    for (i = 0; i < n; i++)
+        buf[i] = raw[i];                      /* the sign is kept, as the device's capture does */
+    free(raw);
+    fclose(f);
+    mic_stop();
+    mic_buf = buf;
+    mic_n = (uint32_t)n;
+    mic_rate = rate;
+    mic_ch = ch;
+    mic_bits = bits;
+    mic_on = 1;
+    return 1;
+bad:
+    fclose(f);
+    return 0;
+}
+
+/* the script's "wavin FILE": the file as given, or in the output directory. */
+static int mic_open(const char *path)
+{
+    char out[400];
+    if (mic_load(path))
+        return 1;
+    snprintf(out, sizeof out, "%s/%s", plat_host_dir, path);
+    return mic_load(out);
+}
+
+int plat_mic_state(void) { return mic_on ? PLAT_MIC_STREAMING : PLAT_MIC_NONE; }
+uint32_t plat_mic_rate(void) { return mic_on ? mic_rate : 0u; }
+int plat_mic_channels(void) { return mic_on ? (int)mic_ch : 0; }
+int plat_mic_bits(void) { return mic_on ? (int)mic_bits : 0; }
+int plat_mic_read(int32_t *dst, uint32_t n)  /* what the device received, up to n samples */
+{
+    uint32_t avail = mic_pos - mic_read, i, ch = mic_ch ? mic_ch : 1u;
+    if (!mic_on || n > avail)
+        n = avail;
+    n -= n % ch;                         /* whole frames only (the capture is a stream of frames) */
+    for (i = 0; i < n; i++)
+        dst[i] = mic_buf[(mic_read + i) % mic_n];
+    mic_read += n;
+    return (int)n;
+}
+
 /* --------------------------------------------------------- the device --- */
 static double audio_due_ms, render_ns_total, render_budget_ns_total;
 static uint32_t ui_due;
@@ -999,6 +1118,15 @@ static void boot(void)
 static void sim_ms_begin(uint32_t ms)
 {
     now_ms = ms;
+    if (mic_on) {                              /* the microphone's samples arrive at the file's rate */
+        /* The rate is the frame rate, as the device reports it: a stereo file at 48 kHz delivers
+         * 2 samples per frame, so 96000 samples a second (the device's capture holds samples). */
+        mic_acc += mic_rate * mic_ch;
+        while (mic_acc >= 1000u) {
+            mic_acc -= 1000u;
+            mic_pos++;
+        }
+    }
     ble_tick();
 #if FM1B_WIFI
     wifi_tick();
@@ -1170,6 +1298,10 @@ static int expect(const char *what, const char *val)
         got = bdev_state;
     else if (!strcmp(what, "midi_in_usb"))          /* plat_midi_count: messages in from USB */
         got = (int)plat_midi_count(PORT_USB, 0);
+    else if (!strcmp(what, "mic_state"))            /* plat_mic_state: 0 none, 1 connected, 2 streaming, 3 error */
+        got = plat_mic_state();
+    else if (!strcmp(what, "mic_rate"))             /* plat_mic_rate: the microphone's rate (0: no microphone) */
+        got = (int)plat_mic_rate();
     else if (!strcmp(what, "peak_db_max") || !strcmp(what, "peak_db_min")) {
         double db = 20.0 * log10(peak_out > 1e-9f ? peak_out : 1e-9f);
         int bad = what[8] == 'm' && what[9] == 'a' ? db > atof(val) : db < atof(val);
@@ -1459,6 +1591,15 @@ int main(int argc, char **argv)
             wav_open(out);
         } else if (!strcmp(cmd, "wavstop"))
             wav_close();
+        else if (!strcmp(cmd, "wavin")) {             /* the microphone: a WAV file fed to the app (no file: it stops) */
+            if (a[0]) {
+                if (!mic_open(a)) {
+                    printf("line %d: wavin %s: not a 16-bit PCM WAV (mono or stereo, 44.1 or 48 kHz)\n", lineno, a);
+                    fails++;
+                }
+            } else
+                mic_stop();
+        }
         else if (!strcmp(cmd, "peakreset"))
             peak_out = 0.0f;
         else if (!strcmp(cmd, "shot")) {

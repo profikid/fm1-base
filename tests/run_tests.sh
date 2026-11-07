@@ -31,6 +31,11 @@ run trs sh -c "$CC -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -Idevice -o $OUT/trs_test 
 run uac-mix sh -c "$CC -std=c99 -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -o $OUT/uac_mix_test tests/uac_mix_test.c && \
     $OUT/uac_mix_test && $CC -std=c99 -O2 -w -Ibsp/chip -Ibsp/boards/fm1 -DTEST_NO_OUT -o $OUT/uac_mix_test_noout \
     tests/uac_mix_test.c && $OUT/uac_mix_test_noout"
+# the USB microphone capture (device/usb_mic.c) against a model of the SIE and of a UAC microphone: the descriptors
+# parsed, the isochronous IN endpoint armed, the packets in the ring in order, the app's read, the disconnect flushing
+# it, a short or oversized packet harmless
+run usb-mic sh -c "$CC -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-function -Ibsp/chip -Ibsp/boards/fm1 \
+    -o $OUT/usb_mic_test tests/usb_mic_test.c && $OUT/usb_mic_test"
 run storage sh -c "$CC -O2 -w -o $OUT/storage_test tests/storage_test.c && $OUT/storage_test"
 run storage-pool sh -c "$CC -O2 -std=c99 -Wall -Wextra -Werror -Wno-unused-function -o $OUT/storage_pool_test \
     tests/storage_pool_test.c && $OUT/storage_pool_test"     # the pool (APP_STORE_POOL): the move, saves, cuts

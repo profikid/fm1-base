@@ -127,6 +127,7 @@ static volatile uint32_t fm1_ms;  /* milliseconds since boot (TIMER4-based, TIME
 #define FELUCCA_MSC FM1B_MSC      /* disk mode: usb.c's mass-storage descriptors and EP3 (msc.c) */
 #define SXQ 128u                  /* the SysEx send ring, in packets: a whole screen-reader SAY (ANN_MAX + 9 bytes) */
 #include "usb.c"
+#include "usb_mic.c"           /* the USB microphone capture (the host session's isochronous IN endpoint) */
 #ifndef FM1B_TRS
 #define FM1B_TRS 1
 #endif

@@ -298,6 +298,15 @@ int plat_usb_lost(void)
     return 1;
 }
 
+/* the USB microphone (device/usb_mic.c): the capture is the platform's, the app reads what the device received.
+ * plat_mic_read is the bounded copy out of the capture's ring (umic_read): it never waits, never allocates and never
+ * touches the flash, so it is safe in the app's audio interrupt. */
+int plat_mic_state(void) { return umic_state(); }
+uint32_t plat_mic_rate(void) { return umic_rate(); }
+int plat_mic_channels(void) { return umic_channels(); }
+int plat_mic_bits(void) { return umic_bits(); }
+int plat_mic_read(int32_t *dst, uint32_t n) { return umic_read(dst, n); }
+
 /* the keys' velocity and pressure (APP_KEY_SENSE): felucca-bsp's analog rows, as fm1-ctl and fm1-monk read them (the
  * converter's clock, a held key driven, the top row probed). Off, the converter is the main loop's (MASTER). */
 void plat_sense(int on)
